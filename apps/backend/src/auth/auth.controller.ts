@@ -35,11 +35,9 @@ export class AuthController {
 
   @Post('register')
   async register(@Body() body: RegisterDto) {
-    const hashedPassword = await bcrypt.hash(body.password, 10);
-    return this.usersService.create({
-      email: body.email,
-      password: hashedPassword,
-    });
+    const hash = await bcrypt.hash(body.password, 10);
+
+    return this.usersService.create({ email: body.email, passwordHash: hash });
   }
 
   @UseGuards(JwtAuthGuard)
