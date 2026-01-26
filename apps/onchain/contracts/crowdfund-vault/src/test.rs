@@ -1,15 +1,16 @@
-#![cfg(test)]
-
-use crate::{CrowdfundVaultContract, CrowdfundVaultContractClient};
 use crate::errors::CrowdfundError;
+use crate::{CrowdfundVaultContract, CrowdfundVaultContractClient};
 use soroban_sdk::{
     symbol_short,
-    testutils::Address as _,
+    testutils::{Address as _, Events},
     token::{StellarAssetClient, TokenClient},
     Address, Env,
 };
 
-fn create_token_contract<'a>(env: &Env, admin: &Address) -> (TokenClient<'a>, StellarAssetClient<'a>) {
+fn create_token_contract<'a>(
+    env: &Env,
+    admin: &Address,
+) -> (TokenClient<'a>, StellarAssetClient<'a>) {
     let contract_address = env.register_stellar_asset_contract_v2(admin.clone());
     (
         TokenClient::new(env, &contract_address.address()),
@@ -17,7 +18,15 @@ fn create_token_contract<'a>(env: &Env, admin: &Address) -> (TokenClient<'a>, St
     )
 }
 
-fn setup_test<'a>(env: &Env) -> (CrowdfundVaultContractClient<'a>, Address, Address, Address, TokenClient<'a>) {
+fn setup_test<'a>(
+    env: &Env,
+) -> (
+    CrowdfundVaultContractClient<'a>,
+    Address,
+    Address,
+    Address,
+    TokenClient<'a>,
+) {
     let admin = Address::generate(env);
     let owner = Address::generate(env);
     let user = Address::generate(env);
@@ -224,7 +233,10 @@ fn test_withdraw_after_approval() {
     client.withdraw(&project_id, &withdraw_amount);
 
     // Verify balance reduced
-    assert_eq!(client.get_balance(&project_id), deposit_amount - withdraw_amount);
+    assert_eq!(
+        client.get_balance(&project_id),
+        deposit_amount - withdraw_amount
+    );
 
     // Verify project data updated
     let project = client.get_project(&project_id);
@@ -336,4 +348,83 @@ fn test_multiple_projects() {
 
     assert_eq!(project_1.target_amount, 1_000_000);
     assert_eq!(project_2.target_amount, 2_000_000);
+}
+
+#[test]
+fn test_contributor_registration() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, _, user, _) = setup_test(&env);
+    client.initialize(&admin);
+
+    // Register contributor
+    client.register_contributor(&user);
+
+    // Verify reputation is 0
+    assert_eq!(client.get_reputation(&user), 0);
+
+    // Try to register again - should fail
+    let result = client.try_register_contributor(&user);
+    assert_eq!(result, Err(Ok(CrowdfundError::AlreadyRegistered)));
+}
+
+#[test]
+fn test_reputation_management() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, _, user, _) = setup_test(&env);
+    client.initialize(&admin);
+
+    // Register contributor first
+    client.register_contributor(&user);
+
+    // Update reputation
+    client.update_reputation(&admin, &user, &100);
+    assert_eq!(client.get_reputation(&user), 100);
+
+    // Decrease reputation
+    client.update_reputation(&admin, &user, &-50);
+    assert_eq!(client.get_reputation(&user), 50);
+
+    // Non-admin cannot update reputation
+    let non_admin = Address::generate(&env);
+    let result = client.try_update_reputation(&non_admin, &user, &100);
+    assert_eq!(result, Err(Ok(CrowdfundError::Unauthorized)));
+}
+
+#[test]
+fn test_events_emission() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (client, admin, owner, user, token_client) = setup_test(&env);
+
+    // Initialize
+    client.initialize(&admin);
+
+    // Create project
+    let project_id = client.create_project(
+        &owner,
+        &symbol_short!("TestProj"),
+        &1_000_000,
+        &token_client.address,
+    );
+
+    // Deposit
+    client.deposit(&user, &project_id, &500_000);
+
+    // Register contributor
+    client.register_contributor(&user);
+
+    // Update reputation
+    client.update_reputation(&admin, &user, &10);
+
+    // Verify events exist (at least one event should be present)
+    let events = env.events().all();
+    assert!(
+        !events.is_empty(),
+        "Expected at least one event to be emitted"
+    );
 }
